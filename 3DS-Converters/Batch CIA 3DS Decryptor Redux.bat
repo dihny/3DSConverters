@@ -4,12 +4,12 @@ setlocal EnableDelayedExpansion
 
 mode con: cols=80 lines=40
 color 0F
-title Batch CIA 3DS Decryptor Redux v1.0
+title Batch CIA 3DS Decryptor Redux v1.1
 
 :: ============================================================================
 :: CONFIGURATION
 :: ============================================================================
-set "Version=v1.0"
+set "Version=v1.1"
 set "addDecryptedSuffix=1"
 
 :: Auto mode detection (called from ROM Manager Suite)
@@ -108,6 +108,20 @@ if "%errorlevel%"=="0" goto :unsupported
 if not exist "bin\decrypt.exe" exit /b 1
 if not exist "!MakeROM!" exit /b 1
 if not exist "bin\ctrtool.exe" exit /b 1
+
+:: Warn about missing seeddb.bin
+if not exist "bin\seeddb.bin" (
+    echo %date% - %time:~0,-3% = [~] seeddb.bin not found - seed-encrypted games may fail >> "!logfile!"
+    if "!autoMode!"=="0" (
+        echo.
+        echo [WARNING] seeddb.bin not found in bin\ folder
+        echo.
+        echo Some newer games ^(2015+^) require seeddb.bin for decryption.
+        echo Download from: https://github.com/ihaveamac/3DS-rom-tools/tree/master/seeddb
+        echo.
+        timeout /t 3 >nul
+    )
+)
 
 :: Clean old NCCH files
 for %%a in (bin\*.ncch *.ncch) do del "%%a" >nul 2>&1
@@ -216,35 +230,49 @@ echo ================================================================
 echo.
 echo Decrypting...
 echo.
-echo          ###############       ###############
-echo          #     INPUT   #       #    OUTPUT   #
+echo.
+echo.
+echo                  #############   #############
+echo                  #         ###   #         ###
 
+set "FancyArt=0"
+
+:: Both CIA and 3DS files present
 if !countCIA! GEQ 1 if !count3DS! GEQ 1 (
     if "!convert3DStoCIA!"=="1" if "!convertToCCI!"=="1" (
-        echo          #  CIA / 3DS  #  ---^>  #  CIA / CCI  #
+        echo                  # CIA/3DS #     # CIA/CCI #
     ) else if "!convert3DStoCIA!"=="1" (
-        echo          #  CIA / 3DS  #  ---^>  #     CIA     #
+        echo                  # CIA/3DS #     #   CIA   #
     ) else if "!convertToCCI!"=="1" (
-        echo          #  CIA / 3DS  #  ---^>  #  CCI / CCI  #
+        echo                  # CIA/3DS #     # CCI/CCI #
     ) else (
-        echo          #  CIA / 3DS  #  ---^>  #  CIA / CCI  #
+        echo                  # CIA/3DS #     # CIA/CCI #
     )
-) else if !countCIA! GEQ 1 (
+    set "FancyArt=1"
+)
+
+:: Only CIA files
+if "!FancyArt!"=="0" if !countCIA! GEQ 1 (
     if "!convertToCCI!"=="1" (
-        echo          #     CIA     #  ---^>  #     CCI     #
+        echo                  #   CIA   #     #   CCI   #
     ) else (
-        echo          #     CIA     #  ---^>  #     CIA     #
+        echo                  #   CIA   #     #   CIA   #
     )
-) else if !count3DS! GEQ 1 (
+    set "FancyArt=1"
+)
+
+:: Only 3DS files
+if "!FancyArt!"=="0" if !count3DS! GEQ 1 (
     if "!convert3DStoCIA!"=="1" (
-        echo          #     3DS     #  ---^>  #     CIA     #
+        echo                  #   3DS   #     #   CIA   #
     ) else (
-        echo          #     3DS     #  ---^>  #     CCI     #
+        echo                  #   3DS   #     #   CCI   #
     )
 )
 
-echo          #             #       #             #
-echo          ###############       ###############
+echo                  #        --------^>        #
+echo                  #         #     #         #
+echo                  ###########     ###########
 echo.
 timeout /t 2 >nul
 exit /b 0
@@ -342,33 +370,48 @@ for %%a in (bin\*.ncch) do del "%%a" >nul 2>&1
 exit /b 0
 
 :: ============================================================================
-:: FUNCTION: Decrypt 3DS File (Improved with better logic)
+:: FUNCTION: Decrypt 3DS File
 :: ============================================================================
 :decrypt3DSFile
 set "inputFile=%~1"
 set "baseName=%~2"
 set "outputFile=%~3"
 
+:: DEBUG: Log input
+echo %date% - %time:~0,-3% = [DEBUG] Input file: %inputFile% >> "!logfile!"
+echo %date% - %time:~0,-3% = [DEBUG] Base name: %baseName% >> "!logfile!"
+
 :: Analyze file with ctrtool
 bin\ctrtool.exe --seeddb=bin\seeddb.bin "%inputFile%" >"!content!" 2>&1
 
-:: Extract metadata
-for /f "tokens=3 delims= " %%x in ('findstr /c:"Title id:" "!content!"') do set "TitleId=%%x"
-for /f "tokens=2 delims= " %%z in ('findstr "TitleVersion" "!content!"') do set "TitleVersion=%%z"
+:: Extract metadata (more robust)
+set "TitleId="
+set "TitleVersion="
 
-:: Better encryption detection - check for "Crypto Key: 0x00" which indicates decrypted
-:: Also check for explicit "None" in crypto key line as fallback
-set "isDecrypted=0"
-
-findstr /C:"Crypto Key: 0x00" "!content!" >nul 2>&1
-if not errorlevel 1 set "isDecrypted=1"
-
-:: Secondary check - look for "None" on Crypto Key line
-if "!isDecrypted!"=="0" (
-    for /f "delims=" %%y in ('findstr /c:"Crypto Key" "!content!"') do set "CryptoKey=%%y"
-    echo "!CryptoKey!" | findstr "None" >nul 2>&1
-    if not errorlevel 1 set "isDecrypted=1"
+for /f "tokens=2 delims=: " %%x in ('findstr /c:"Title id:" "!content!"') do (
+    if not defined TitleId (
+        set "TitleId=%%x"
+        set "TitleId=!TitleId: =!"
+    )
 )
+
+for /f "tokens=3 delims= " %%z in ('findstr /c:"Title version:" "!content!"') do (
+    if not defined TitleVersion set "TitleVersion=%%z"
+)
+
+:: Fallback if extraction failed
+if "!TitleId!"=="" set "TitleId=unknown"
+if "!TitleId!"=="id" set "TitleId=unknown"
+if "!TitleVersion!"=="" set "TitleVersion=0"
+
+:: DEBUG: Log extracted metadata
+echo %date% - %time:~0,-3% = [DEBUG] Extracted Title ID: !TitleId! >> "!logfile!"
+echo %date% - %time:~0,-3% = [DEBUG] Extracted Version: !TitleVersion! >> "!logfile!"
+
+:: Better encryption detection
+set "isDecrypted=0"
+findstr /c:"Crypto key:             0x00" "!content!" >nul 2>&1
+if !errorlevel!==0 set "isDecrypted=1"
 
 :: Check if already decrypted
 if "!isDecrypted!"=="1" (
@@ -385,67 +428,197 @@ echo %date% - %time:~0,-3% = [i] Decrypting "!fullFileName!" [!TitleId! v!TitleV
 :: Golf easter egg check
 if "!golfEvent!"=="0" call :checkGolfTitle "!TitleId!"
 
-:: Decrypt using quoted paths (safe with special characters)
-echo.| bin\decrypt.exe "%inputFile%" >nul 2>&1
+:: DEBUG: Check file exists before copy
+if not exist "%inputFile%" (
+    echo %date% - %time:~0,-3% = [DEBUG] ERROR - Input file does not exist! >> "!logfile!"
+    set /a failed3DS+=1
+    exit /b 1
+)
 
-:: Rename NCCH files to bin\tmp.* format (like reference scripts)
+:: Copy file to bin\ before decrypting
+echo %date% - %time:~0,-3% = [DEBUG] Copying file to bin\temp_decrypt.3ds >> "!logfile!"
+copy "%inputFile%" "bin\temp_decrypt.3ds" >nul 2>&1
+
+if not exist "bin\temp_decrypt.3ds" (
+    echo %date% - %time:~0,-3% = [DEBUG] ERROR - Copy failed! >> "!logfile!"
+    set /a failed3DS+=1
+    exit /b 1
+)
+
+:: Decrypt in bin\ directory
+echo %date% - %time:~0,-3% = [DEBUG] Running decrypt.exe >> "!logfile!"
+pushd bin
+decrypt.exe "temp_decrypt.3ds" --no-verbose >decrypt_output.txt 2>&1
+set "decryptExit=!errorlevel!"
+popd
+
+:: DEBUG: Log decrypt result
+echo %date% - %time:~0,-3% = [DEBUG] decrypt.exe exit code: !decryptExit! >> "!logfile!"
+if exist "bin\decrypt_output.txt" (
+    echo %date% - %time:~0,-3% = [DEBUG] decrypt.exe output: >> "!logfile!"
+    type "bin\decrypt_output.txt" >> "!logfile!"
+)
+
+:: Clean temp input file
+del "bin\temp_decrypt.3ds" >nul 2>&1
+
+:: Check if NCCH files were created
+set "ncchCount=0"
+for %%F in (bin\*.ncch) do set /a ncchCount+=1
+
+echo %date% - %time:~0,-3% = [DEBUG] NCCH files found: !ncchCount! >> "!logfile!"
+
+if !ncchCount!==0 (
+    echo %date% - %time:~0,-3% = [DEBUG] ERROR - No NCCH files created by decrypt.exe! >> "!logfile!"
+    if "!autoMode!"=="0" echo [FAIL] decrypt.exe created no output files
+    set /a failed3DS+=1
+    exit /b 1
+)
+
+:: List NCCH files before rename
+echo %date% - %time:~0,-3% = [DEBUG] NCCH files before rename: >> "!logfile!"
+for %%F in (bin\*.ncch) do echo %date% - %time:~0,-3% = [DEBUG]   %%F >> "!logfile!"
+
+:: Rename NCCH files
 call :renameNCCHFiles
+
+:: List NCCH files after rename
+echo %date% - %time:~0,-3% = [DEBUG] NCCH files after rename: >> "!logfile!"
+for %%F in (bin\tmp.*.ncch) do echo %date% - %time:~0,-3% = [DEBUG]   %%F >> "!logfile!"
 
 :: Build makerom arguments
 set "ARG="
 for %%f in ("bin\tmp.*.ncch") do (
-    if %%f==bin\tmp.Main.ncch set "i=0"
-    if %%f==bin\tmp.Manual.ncch set "i=1"
-    if %%f==bin\tmp.DownloadPlay.ncch set "i=2"
-    if %%f==bin\tmp.Partition4.ncch set "i=3"
-    if %%f==bin\tmp.Partition5.ncch set "i=4"
-    if %%f==bin\tmp.Partition6.ncch set "i=5"
-    if %%f==bin\tmp.N3DSUpdateData.ncch set "i=6"
-    if %%f==bin\tmp.UpdateData.ncch set "i=7"
+    if "%%~nxf"=="tmp.Main.ncch" set "i=0"
+    if "%%~nxf"=="tmp.Manual.ncch" set "i=1"
+    if "%%~nxf"=="tmp.DownloadPlay.ncch" set "i=2"
+    if "%%~nxf"=="tmp.Partition4.ncch" set "i=3"
+    if "%%~nxf"=="tmp.Partition5.ncch" set "i=4"
+    if "%%~nxf"=="tmp.Partition6.ncch" set "i=5"
+    if "%%~nxf"=="tmp.N3DSUpdateData.ncch" set "i=6"
+    if "%%~nxf"=="tmp.UpdateData.ncch" set "i=7"
     set "ARG=!ARG! -i "%%f:!i!:!i!""
+    echo %date% - %time:~0,-3% = [DEBUG] Added to ARG: -i "%%f:!i!:!i!" >> "!logfile!"
+)
+
+:: DEBUG: Log final ARG
+echo %date% - %time:~0,-3% = [DEBUG] Final makerom ARG: !ARG! >> "!logfile!"
+
+if "!ARG!"=="" (
+    echo %date% - %time:~0,-3% = [DEBUG] ERROR - ARG is empty, no NCCH files matched! >> "!logfile!"
+    set /a failed3DS+=1
+    exit /b 1
 )
 
 :: Build output based on format
 if "!convert3DStoCIA!"=="1" (
-    :: First create CCI, then convert to CIA
-    set "tempCCI=!baseName!.temp.cci"
-    if "!autoMode!"=="0" echo [BUILD] Creating temporary CCI...
-    "!MakeROM!" -f cci -ignoresign -target p -o "!tempCCI!"!ARG! >nul 2>&1
+    :: Build CIA directly from NCCH files
+    if "!autoMode!"=="0" echo [BUILD] Creating CIA...
     
-    if exist "!tempCCI!" (
-        if "!autoMode!"=="0" echo [CONVERT] Converting to CIA...
-        "!MakeROM!" -f cia -ignoresign -target p -o "!outputFile!" -i "!tempCCI!":0:0 >nul 2>&1
-        del "!tempCCI!" >nul 2>&1
+    echo %date% - %time:~0,-3% = [DEBUG] makerom CIA command: -f cia -ignoresign -target t -o "!outputFile!"!ARG! >> "!logfile!"
+    
+    :: Capture ALL output
+    "!MakeROM!" -f cia -ignoresign -target t -o "!outputFile!"!ARG! >bin\makerom_output.txt 2>&1
+    set "makeromExit=!errorlevel!"
+    
+    :: Log output
+    echo %date% - %time:~0,-3% = [DEBUG] makerom exit code: !makeromExit! >> "!logfile!"
+    echo %date% - %time:~0,-3% = [DEBUG] makerom output: >> "!logfile!"
+    type bin\makerom_output.txt >> "!logfile!"
+    echo. >> "!logfile!"
+    
+    :: Check for errors in output (since exit code is unreliable)
+    findstr /i "ERROR" bin\makerom_output.txt >nul 2>&1
+    if !errorlevel!==0 (
+        if "!autoMode!"=="0" echo [FAIL] makerom reported errors
+        echo %date% - %time:~0,-3% = [^^!] makerom CIA build failed for "!baseName!" >> "!logfile!"
+        del bin\makerom_output.txt >nul 2>&1
+        set /a failed3DS+=1
+        exit /b 1
     )
+    
+    :: Check if output was created
+    if not exist "!outputFile!" (
+        echo %date% - %time:~0,-3% = [DEBUG] ERROR - CIA was not created! >> "!logfile!"
+        if "!autoMode!"=="0" echo [FAIL] CIA creation failed
+        del bin\makerom_output.txt >nul 2>&1
+        set /a failed3DS+=1
+        exit /b 1
+    )
+    
 ) else (
+    :: Build CCI directly
     if "!autoMode!"=="0" echo [BUILD] Creating CCI...
-    "!MakeROM!" -f cci -ignoresign -target p -o "!outputFile!"!ARG! >nul 2>&1
+    echo %date% - %time:~0,-3% = [DEBUG] makerom CCI command: -f cci -ignoresign -target t -o "!outputFile!"!ARG! >> "!logfile!"
+    
+    :: Capture ALL output
+    "!MakeROM!" -f cci -ignoresign -target t -o "!outputFile!"!ARG! >bin\makerom_output.txt 2>&1
+    set "makeromExit=!errorlevel!"
+    
+    :: Log output
+    echo %date% - %time:~0,-3% = [DEBUG] makerom exit code: !makeromExit! >> "!logfile!"
+    echo %date% - %time:~0,-3% = [DEBUG] makerom output: >> "!logfile!"
+    type bin\makerom_output.txt >> "!logfile!"
+    echo. >> "!logfile!"
+    
+    :: Check for errors in output
+    findstr /i "ERROR" bin\makerom_output.txt >nul 2>&1
+    if !errorlevel!==0 (
+        if "!autoMode!"=="0" echo [FAIL] makerom reported errors
+        echo %date% - %time:~0,-3% = [^^!] makerom CCI build failed for "!baseName!" >> "!logfile!"
+        del bin\makerom_output.txt >nul 2>&1
+        set /a failed3DS+=1
+        exit /b 1
+    )
+    
+    :: Check if output was created
+    if not exist "!outputFile!" (
+        echo %date% - %time:~0,-3% = [DEBUG] ERROR - CCI was not created! >> "!logfile!"
+        if "!autoMode!"=="0" echo [FAIL] CCI creation failed
+        del bin\makerom_output.txt >nul 2>&1
+        set /a failed3DS+=1
+        exit /b 1
+    )
 )
+
+:: Clean output logs
+if exist "bin\makerom_output.txt" del "bin\makerom_output.txt" >nul 2>&1
+if exist "bin\decrypt_output.txt" del "bin\decrypt_output.txt" >nul 2>&1
 
 :: Clean NCCH files
 for %%b in (bin\*.ncch) do del "%%b" >nul 2>&1
 
-:: Check result
+:: Check result and increment counters
 if exist "!outputFile!" (
     if "!autoMode!"=="0" echo [ OK ] Successfully created !outputFile!
     echo %date% - %time:~0,-3% = [i] Decrypting succeeded for "!baseName!" >> "!logfile!"
     set /a success3DS+=1
     set /a finalCount+=1
 ) else (
-    if "!autoMode!"=="0" echo [FAIL] Decryption failed
-    echo %date% - %time:~0,-3% = [^^!] Decrypting failed for "!baseName!" >> "!logfile!"
+    if "!autoMode!"=="0" echo [FAIL] Output file not created
+    echo %date% - %time:~0,-3% = [^^!] Output file was not created for "!baseName!" >> "!logfile!"
     set /a failed3DS+=1
 )
 
 exit /b 0
 
 :: ============================================================================
-:: FUNCTION: Rename NCCH Files (like reference scripts)
+:: FUNCTION: Rename NCCH Files
 :: ============================================================================
 :renameNCCHFiles
-for %%F in (bin\*.ncch) do (
-    ren "%%F" "tmp.*.ncch" >nul 2>&1
-)
+:: decrypt.exe creates files like "temp_decrypt.Main.ncch"
+:: We need to rename them to "tmp.Main.ncch" format
+:: IMPORTANT: "Download Play" has a SPACE in the partition name!
+
+for %%F in ("bin\*.Main.ncch") do ren "%%F" "tmp.Main.ncch" 2>nul
+for %%F in ("bin\*.Manual.ncch") do ren "%%F" "tmp.Manual.ncch" 2>nul
+for %%F in ("bin\*.Download Play.ncch") do ren "%%F" "tmp.DownloadPlay.ncch" 2>nul
+for %%F in ("bin\*.Partition4.ncch") do ren "%%F" "tmp.Partition4.ncch" 2>nul
+for %%F in ("bin\*.Partition5.ncch") do ren "%%F" "tmp.Partition5.ncch" 2>nul
+for %%F in ("bin\*.Partition6.ncch") do ren "%%F" "tmp.Partition6.ncch" 2>nul
+for %%F in ("bin\*.N3DSUpdateData.ncch") do ren "%%F" "tmp.N3DSUpdateData.ncch" 2>nul
+for %%F in ("bin\*.UpdateData.ncch") do ren "%%F" "tmp.UpdateData.ncch" 2>nul
+
 exit /b 0
 
 :: ============================================================================
@@ -532,7 +705,7 @@ for %%a in (bin\*.ncch) do del "%%a" >nul 2>&1
 exit /b 0
 
 :: ============================================================================
-:: FUNCTION: Decrypt CIA File (Improved logic from reference scripts)
+:: FUNCTION: Decrypt CIA File
 :: ============================================================================
 :decryptCIAFile
 set "inputFile=%~1"
@@ -545,35 +718,41 @@ if exist "!content!" del "!content!" >nul 2>&1
 :: Analyze CIA with ctrtool
 bin\ctrtool.exe --seeddb=bin\seeddb.bin "%inputFile%" >"!content!" 2>&1
 
-:: Extract metadata
-for /f "tokens=3 delims= " %%x in ('findstr /c:"Title id:" "!content!"') do set "TitleId=%%x"
-for /f "tokens=3 delims= " %%z in ('findstr "TitleVersion" "!content!"') do set "TitleVersion=%%z"
-for /f "delims=" %%y in ('findstr /c:"Crypto Key" "!content!"') do set "CryptoKey=%%y"
+:: Extract metadata using correct token positions
+set "TitleId="
+set "TitleVersion="
+for /f "tokens=2 delims=: " %%x in ('findstr /c:"Title id:" "!content!"') do (
+    if not defined TitleId (
+        set "TitleId=%%x"
+        set "TitleId=!TitleId: =!"
+    )
+)
+for /f "tokens=3 delims= " %%z in ('findstr /c:"Title version:" "!content!"') do (
+    if not defined TitleVersion set "TitleVersion=%%z"
+)
 
 :: Check for errors
 set /p "ctrtool_data="<"!content!"
 echo "!ctrtool_data!" | findstr "ERROR" >nul 2>&1
-if not errorlevel 1 (
+if !errorlevel!==0 (
     if "!autoMode!"=="0" echo [FAIL] Invalid CIA file
     echo %date% - %time:~0,-3% = [^^!] CIA is invalid [!baseName!.cia] >> "!logfile!"
     set /a failedCIA+=1
     exit /b 0
 )
 
-:: Check if encrypted
-echo "!CryptoKey!" | findstr "Secure" >nul 2>&1
-set "isEncrypted=!errorlevel!"
-
-echo "!CryptoKey!" | findstr "None" >nul 2>&1
-if not errorlevel 1 (
+:: Check if decrypted using correct crypto key detection
+findstr /c:"Crypto key:             0x00" "!content!" >nul 2>&1
+if !errorlevel!==0 (
     if "!autoMode!"=="0" echo [SKIP] Already decrypted
     echo %date% - %time:~0,-3% = [~] CIA file "!baseName!" [!TitleId! v!TitleVersion!] is already decrypted >> "!logfile!"
     set /a skippedCIA+=1
     exit /b 0
 )
 
-:: Check if it's an encrypted standard CIA
-if "!isEncrypted!"=="0" (
+:: Check if it's encrypted (look for Secure in crypto key)
+findstr /c:"Crypto key:" "!content!" | findstr "Secure" >nul 2>&1
+if !errorlevel!==0 (
     :: Standard CIA processing
     call :processCIAByType "%inputFile%" "!baseName!" "!outputFile!" "!TitleId!" "!TitleVersion!"
 ) else (
@@ -600,9 +779,11 @@ set "ARG="
 :: Golf easter egg check
 if "!golfEvent!"=="0" call :checkGolfTitle "!titleId!"
 
-:: Game titles (eShop/Gamecard)
-echo "!titleId!" | findstr /i "00040000" >nul 2>&1
-if not errorlevel 1 (
+:: Use proper Title ID category detection (extract category from position 4-7)
+set "Category=!titleId:~4,4!"
+
+:: Game titles (eShop/Gamecard) - category 0000
+if /i "!Category!"=="0000" (
     echo %date% - %time:~0,-3% = [i] CIA file "!baseName!" [!titleId! v!titleVer!] is a eShop or Gamecard title >> "!logfile!"
     set "CIAType=1"
     set "typeLabel=Game"
@@ -610,19 +791,24 @@ if not errorlevel 1 (
     exit /b 0
 )
 
-:: System titles
-echo "!titleId!" | findstr /i "00040010 0004001b 00040030 0004009b 000400db 00040130 00040138" >nul 2>&1
-if not errorlevel 1 (
+:: System titles - categories 0010, 001b, 0030, 009b, 00db, 0130, 0138
+if /i "!Category!"=="0010" set "CIAType=1"
+if /i "!Category!"=="001b" set "CIAType=1"
+if /i "!Category!"=="0030" set "CIAType=1"
+if /i "!Category!"=="009b" set "CIAType=1"
+if /i "!Category!"=="00db" set "CIAType=1"
+if /i "!Category!"=="0130" set "CIAType=1"
+if /i "!Category!"=="0138" set "CIAType=1"
+
+if "!CIAType!"=="1" (
     call :logCIASystemType "!titleId!" "!baseName!" "!titleVer!"
-    set "CIAType=1"
     set "typeLabel=System"
     call :decryptAndRebuildCIA "%inputPath%" "!baseName!" "!typeLabel!" "!titleVer!"
     exit /b 0
 )
 
-:: Demos
-echo "!titleId!" | findstr /i "00040002" >nul 2>&1
-if not errorlevel 1 (
+:: Demos - category 0002
+if /i "!Category!"=="0002" (
     echo %date% - %time:~0,-3% = [i] CIA file "!baseName!" [!titleId! v!titleVer!] is a demo title >> "!logfile!"
     set "CIAType=1"
     set "typeLabel=Demo"
@@ -630,9 +816,8 @@ if not errorlevel 1 (
     exit /b 0
 )
 
-:: Updates
-echo "!titleId!" | findstr /i "0004000e" >nul 2>&1
-if not errorlevel 1 (
+:: Updates - category 000e
+if /i "!Category!"=="000e" (
     echo %date% - %time:~0,-3% = [i] CIA file "!baseName!" [!titleId! v!titleVer!] is an update title >> "!logfile!"
     set "CIAType=1"
     set "typeLabel=Patch"
@@ -640,13 +825,12 @@ if not errorlevel 1 (
     exit /b 0
 )
 
-:: DLC
-echo "!titleId!" | findstr /i "0004008c" >nul 2>&1
-if not errorlevel 1 (
+:: DLC - category 008c
+if /i "!Category!"=="008c" (
     echo %date% - %time:~0,-3% = [i] CIA file "!baseName!" [!titleId! v!titleVer!] is a DLC title >> "!logfile!"
     set "CIAType=1"
     set "typeLabel=DLC"
-    call :decryptAndRebuildCIA "%inputPath%" "!baseName!" "!typeLabel!" "!titleVer!" "dlc"
+    call :decryptAndRebuildCIA "%inputPath!" "!baseName!" "!typeLabel!" "!titleVer!" "dlc"
     exit /b 0
 )
 
@@ -669,9 +853,16 @@ set "typeLabel=%~3"
 set "titleVer=%~4"
 set "isDLC=%~5"
 
-:: Decrypt
-if "!autoMode!"=="0" echo [DECRYPT] Processing CIA...
-echo.| bin\decrypt.exe "%inputPath%" >nul 2>&1
+:: Copy to bin\ before decrypting
+copy "%inputPath%" "bin\temp_decrypt.cia" >nul 2>&1
+
+:: Decrypt in bin\ directory
+pushd bin
+echo.| decrypt.exe "temp_decrypt.cia" --no-verbose >nul 2>&1
+popd
+
+:: Clean temp file
+del "bin\temp_decrypt.cia" >nul 2>&1
 
 :: Rename to tmp format
 call :renameNCCHFiles
@@ -690,11 +881,25 @@ set "finalCIA=!baseName! !typeLabel!!suffix!.cia"
 if "!autoMode!"=="0" echo [BUILD] Creating CIA...
 echo %date% - %time:~0,-3% = [i] Calling makerom for !typeLabel! CIA >> "!logfile!"
 
+:: Capture makerom errors and check exit code
 if /i "!isDLC!"=="dlc" (
-    "!MakeROM!" -f cia -dlc -ignoresign -target p -o "!finalCIA!"!ARG! -ver !titleVer! >nul 2>&1
+    "!MakeROM!" -f cia -dlc -ignoresign -target p -o "!finalCIA!"!ARG! -ver !titleVer! >nul 2>bin\makerom_error.txt
 ) else (
-    "!MakeROM!" -f cia -ignoresign -target p -o "!finalCIA!"!ARG! -ver !titleVer! >nul 2>&1
+    "!MakeROM!" -f cia -ignoresign -target p -o "!finalCIA!"!ARG! -ver !titleVer! >nul 2>bin\makerom_error.txt
 )
+
+:: Check makerom result
+if !errorlevel! neq 0 (
+    if "!autoMode!"=="0" echo [FAIL] makerom failed
+    echo %date% - %time:~0,-3% = [^^!] makerom failed for !typeLabel! CIA [!TitleId! v!titleVer!] >> "!logfile!"
+    type bin\makerom_error.txt >> "!logfile!"
+    del bin\makerom_error.txt >nul 2>&1
+    set /a failedCIA+=1
+    exit /b 1
+)
+
+:: Clean error log if successful
+if exist "bin\makerom_error.txt" del "bin\makerom_error.txt" >nul 2>&1
 
 :: Check result
 if exist "!finalCIA!" (
@@ -726,9 +931,9 @@ set "outputPath=%~3"
 set "titleId=%~4"
 set "titleVer=%~5"
 
-:: Check for TWL title
-echo "!titleId!" | findstr /i "00048005 0004800f 00048004" >nul 2>&1
-if errorlevel 1 exit /b 0
+:: Check for TWL using category detection
+set "TWLCheck=!titleId:~0,5!"
+if not "!TWLCheck!"=="00048" exit /b 0
 
 :: Log TWL title type
 call :logTWLType "!titleId!" "!baseName!" "!titleVer!"
@@ -748,12 +953,24 @@ if exist "bin\00000000.app" (
     
     set "finalCIA=!baseName! TWL!suffix!.cia"
     
-    "!MakeROM!" -srl "bin\00000000.app" -f cia -ignoresign -target p -o "!finalCIA!" -ver !titleVer! >nul 2>&1
+    :: Capture makerom errors
+    "!MakeROM!" -srl "bin\00000000.app" -f cia -ignoresign -target p -o "!finalCIA!" -ver !titleVer! >nul 2>bin\makerom_error.txt
     
     :: Clean temp file
     if exist "bin\00000000.app" del "bin\00000000.app" >nul 2>&1
     
     :: Check result
+    if !errorlevel! neq 0 (
+        if "!autoMode!"=="0" echo [FAIL] TWL makerom failed
+        echo %date% - %time:~0,-3% = [^^!] TWL makerom failed [!titleId! v!titleVer!] >> "!logfile!"
+        type bin\makerom_error.txt >> "!logfile!"
+        del bin\makerom_error.txt >nul 2>&1
+        set /a failedCIA+=1
+        exit /b 1
+    )
+    
+    if exist "bin\makerom_error.txt" del "bin\makerom_error.txt" >nul 2>&1
+    
     if exist "!finalCIA!" (
         if "!autoMode!"=="0" echo [ OK ] !finalCIA! created (TWL)
         echo %date% - %time:~0,-3% = [i] Decrypting succeeded [!titleId! v!titleVer!] >> "!logfile!"
@@ -785,8 +1002,13 @@ for %%a in ("!baseName!*!suffix!.cia") do (
     
     :: Analyze to get Title ID
     bin\ctrtool.exe --seeddb=bin\seeddb.bin "!ciaFile!" >"!content!" 2>&1
-    for /f "tokens=3 delims= " %%x in ('findstr /c:"Title id:" "!content!"') do set "TitleId=%%x"
-    for /f "tokens=3 delims= " %%z in ('findstr "TitleVersion" "!content!"') do set "TitleVersion=%%z"
+    
+    :: Extract Title ID correctly
+    for /f "tokens=2 delims=: " %%x in ('findstr /c:"Title id:" "!content!"') do (
+        set "TitleId=%%x"
+        set "TitleId=!TitleId: =!"
+    )
+    for /f "tokens=3 delims= " %%z in ('findstr /c:"Title version:" "!content!"') do set "TitleVersion=%%z"
     
     call :convertCIAtoCCI "!ciaFile!" "!ciaName!" ""
 )
@@ -801,12 +1023,14 @@ set "ciaPath=%~1"
 set "baseName=%~2"
 set "typeLabel=%~3"
 
-:: Check if conversion is supported for this title
-echo "!TitleId!" | findstr /i "000400db 0004001b 0004009b 00040010 00040030 00040130 0004000e 0004008c 00048005 0004800f 00048004 00040002" >nul 2>&1
-if not errorlevel 1 (
+:: Extract category from Title ID for checking
+set "Category=!TitleId:~4,4!"
+
+:: Check if conversion is supported (games only - category 0000)
+if not "!Category!"=="0000" (
     :: Title type doesn't support CCI conversion
     if "!autoMode!"=="0" echo [ OK ] !ciaPath! created (CCI not supported)
-    echo %date% - %time:~0,-3% = [^^!] Converting to CCI for this title is not supported [!TitleId! v!TitleVersion!] >> "!logfile!"
+    echo %date% - %time:~0,-3% = [~] Converting to CCI for this title is not supported [!TitleId! v!TitleVersion!] >> "!logfile!"
     set /a successCIA+=1
     set /a finalCount+=1
     exit /b 0
@@ -817,7 +1041,20 @@ set "cciPath=!baseName!.cci"
 if "!autoMode!"=="0" echo [CONVERT] Creating CCI...
 echo %date% - %time:~0,-3% = [i] Converting to CCI [!ciaPath!] >> "!logfile!"
 
-"!MakeROM!" -ciatocci "!ciaPath!" -o "!cciPath!" >nul 2>&1
+:: Capture makerom errors
+"!MakeROM!" -ciatocci "!ciaPath!" -o "!cciPath!" >nul 2>bin\makerom_error.txt
+
+if !errorlevel! neq 0 (
+    if "!autoMode!"=="0" echo [ OK ] !ciaPath! created (CCI conversion failed)
+    echo %date% - %time:~0,-3% = [^^!] Converting to CCI failed [!ciaPath!] >> "!logfile!"
+    type bin\makerom_error.txt >> "!logfile!"
+    del bin\makerom_error.txt >nul 2>&1
+    set /a successCIA+=1
+    set /a finalCount+=1
+    exit /b 0
+)
+
+if exist "bin\makerom_error.txt" del "bin\makerom_error.txt" >nul 2>&1
 
 if exist "!cciPath!" (
     :: Delete source CIA after successful conversion
@@ -843,23 +1080,15 @@ set "checkId=%~1"
 set "fileName=%~2"
 set "version=%~3"
 
-echo "!checkId!" | findstr /i "00040010" >nul 2>&1
-if not errorlevel 1 echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a system application >> "!logfile!"
+set "Category=!checkId:~4,4!"
 
-echo "!checkId!" | findstr /i "0004001b 000400db" >nul 2>&1
-if not errorlevel 1 echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a system data archive >> "!logfile!"
-
-echo "!checkId!" | findstr /i "00040030" >nul 2>&1
-if not errorlevel 1 echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a system applet >> "!logfile!"
-
-echo "!checkId!" | findstr /i "0004009b" >nul 2>&1
-if not errorlevel 1 echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a shared data archive >> "!logfile!"
-
-echo "!checkId!" | findstr /i "00040130" >nul 2>&1
-if not errorlevel 1 echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a system module >> "!logfile!"
-
-echo "!checkId!" | findstr /i "00040138" >nul 2>&1
-if not errorlevel 1 echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a system firmware >> "!logfile!"
+if /i "!Category!"=="0010" echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a system application >> "!logfile!"
+if /i "!Category!"=="001b" echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a system data archive >> "!logfile!"
+if /i "!Category!"=="00db" echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a system data archive >> "!logfile!"
+if /i "!Category!"=="0030" echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a system applet >> "!logfile!"
+if /i "!Category!"=="009b" echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a shared data archive >> "!logfile!"
+if /i "!Category!"=="0130" echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a system module >> "!logfile!"
+if /i "!Category!"=="0138" echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a system firmware >> "!logfile!"
 
 exit /b 0
 
@@ -871,14 +1100,11 @@ set "checkId=%~1"
 set "fileName=%~2"
 set "version=%~3"
 
-echo "!checkId!" | findstr /i "00048005" >nul 2>&1
-if not errorlevel 1 echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a TWL title [System Application] >> "!logfile!"
+set "Category=!checkId:~4,4!"
 
-echo "!checkId!" | findstr /i "0004800f" >nul 2>&1
-if not errorlevel 1 echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a TWL title [System Data Archive] >> "!logfile!"
-
-echo "!checkId!" | findstr /i "00048004" >nul 2>&1
-if not errorlevel 1 echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a TWL title [3DS DSiWare Ports] >> "!logfile!"
+if /i "!Category!"=="8005" echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a TWL title [System Application] >> "!logfile!"
+if /i "!Category!"=="800f" echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a TWL title [System Data Archive] >> "!logfile!"
+if /i "!Category!"=="8004" echo %date% - %time:~0,-3% = [i] CIA file "!fileName!" [!checkId! v!version!] is a TWL title [3DS DSiWare Ports] >> "!logfile!"
 
 exit /b 0
 
@@ -920,9 +1146,9 @@ if "!autoMode!"=="1" exit /b 0
 :: 0004000000042D00 = Golf (USA)
 :: 0004000000042B00 = Golf (EUR)
 :: 0004000000181B00 = Golf (JPN)
-if /i "!checkTitleId!"=="0004000000042D00" call :showGolfTribute
-if /i "!checkTitleId!"=="0004000000042B00" call :showGolfTribute
-if /i "!checkTitleId!"=="0004000000181B00" call :showGolfTribute
+if /i "!checkTitleId!"=="0004000000042d00" call :showGolfTribute
+if /i "!checkTitleId!"=="0004000000042b00" call :showGolfTribute
+if /i "!checkTitleId!"=="0004000000181b00" call :showGolfTribute
 
 exit /b 0
 
@@ -1054,6 +1280,9 @@ exit /b 0
 :: Clean any remaining temp files
 for %%a in (bin\*.ncch) do del "%%a" >nul 2>&1
 if exist "!content!" del "!content!" >nul 2>&1
+if exist "bin\makerom_error.txt" del "bin\makerom_error.txt" >nul 2>&1
+if exist "bin\temp_decrypt.3ds" del "bin\temp_decrypt.3ds" >nul 2>&1
+if exist "bin\temp_decrypt.cia" del "bin\temp_decrypt.cia" >nul 2>&1
 
 endlocal
 exit /b 0
